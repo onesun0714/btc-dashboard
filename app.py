@@ -165,12 +165,17 @@ def zone_label(s):
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_master():
     tickers = {'BTC-USD':'BTC','DX-Y.NYB':'DXY','^IXIC':'Nasdaq','GC=F':'Gold'}
-    raw = yf.download(list(tickers.keys()), start='2019-01-01', progress=False, auto_adjust=True)
-    close = raw['Close'] if 'Close' in raw.columns.get_level_values(0) else raw
-    close.columns = [tickers.get(c, c) for c in close.columns]
+    raw = yf.download(list(tickers.keys()), period='max', progress=False, auto_adjust=True)
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw['Close']
+    else:
+        close = raw
+    close = close[[c for c in tickers.keys() if c in close.columns]]
+    close.columns = [tickers[c] for c in close.columns]
     master = close.reset_index()
     master.columns = ['date'] + list(master.columns[1:])
     master['date'] = pd.to_datetime(master['date']).dt.tz_localize(None)
+    master = master[master['date'] >= '2019-01-01'].copy()
 
     for ep, (col, field) in {
         'mvrv-zscore': ('MVRV_Z','mvrvZscore'),
@@ -204,23 +209,28 @@ def load_master():
             df[col] = pd.to_numeric(df['value'], errors='coerce')
             master = master.merge(df[['date', col]].dropna(), on='date', how='left')
 
-    master = master.sort_values('date').ffill(limit=14).reset_index(drop=True)
-    master['MOM4W']       = master['BTC'].pct_change(20) * 100
-    master['MOM12W']      = master['BTC'].pct_change(60) * 100
-    master['m2_chg_3m']   = master['M2'].pct_change(63) * 100
-    master['dxy_vs_sma50']= master['DXY'] / master['DXY'].rolling(50).mean() - 1
-    master['hy_chg_20d']  = master['HY_Spread'] - master['HY_Spread'].shift(20)
-    master['vix_vs_sma50']= master['VIX'] / master['VIX'].rolling(50).mean() - 1
-    master['btc_200d']    = master['BTC'].rolling(200).mean()
-    master['btc_90d_high']= master['BTC'].rolling(90).max()
-    master['btc_dd_90d']  = master['BTC'] / master['btc_90d_high'] - 1
-
+    master = master.sort_values('date').reset_index(drop=True)
+    for col in ['MVRV_Z','MVRV','NUPL','SOPR','FnG']:
+        if col in master.columns: master[col] = master[col].ffill(limit=3)
+    for col in ['VIX','M2','HY_Spread']:
+        if col in master.columns: master[col] = master[col].ffill(limit=14)
+    master['MOM4W']        = master['BTC'].pct_change(20) * 100
+    master['MOM12W']       = master['BTC'].pct_change(60) * 100
+    master['m2_chg_3m']    = master['M2'].pct_change(63) * 100 if 'M2' in master.columns else 0
+    master['dxy_vs_sma50'] = master['DXY'] / master['DXY'].rolling(50).mean() - 1
+    master['hy_chg_20d']   = (master['HY_Spread'] - master['HY_Spread'].shift(20)) if 'HY_Spread' in master.columns else 0
+    master['vix_vs_sma50'] = (master['VIX'] / master['VIX'].rolling(50).mean() - 1) if 'VIX' in master.columns else 0
+    master['btc_200d']     = master['BTC'].rolling(200).mean()
+    master['btc_90d_high'] = master['BTC'].rolling(90).max()
+    master['btc_dd_90d']   = master['BTC'] / master['btc_90d_high'] - 1
+    master['m2_chg_3m']    = master['m2_chg_3m'].fillna(0)
+    master['hy_chg_20d']   = master['hy_chg_20d'].fillna(0)
+    master['vix_vs_sma50'] = master['vix_vs_sma50'].fillna(0)
     master['regime'] = master.apply(lambda r: classify_regime(r.to_dict()), axis=1)
     master['score']  = master.apply(lambda r: compute_score(r.to_dict(), r['regime']), axis=1)
     master['phase']  = master.apply(
-        lambda r: classify_phase(r['regime'], r.get('MVRV_Z', 1), r['score'], r.get('MOM12W', 0)), axis=1)
-
-    return master.dropna(subset=['BTC', 'score'])
+        lambda r: classify_phase(r['regime'], r.get('MVRV_Z') or 1, r['score'], r.get('MOM12W') or 0), axis=1)
+    return master[master['BTC'].notna() & master['score'].notna()].copy()
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def run_backtest(_master):
