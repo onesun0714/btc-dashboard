@@ -240,6 +240,8 @@ def run_backtest(_master):
     hold_days = 0; in_position = False
     eq_series = []
 
+    stop_cooldown = 0  # days since stop_loss fired
+
     for i in range(1, len(bt)):
         row  = bt.iloc[i]
         prev = bt.iloc[i - 1]
@@ -257,12 +259,20 @@ def run_backtest(_master):
 
         tgt = target_position(score, regime, phase, above_200, dd_90)
 
+        # Trailing stop (per-trade)
         if position > 0 and entry_price > 0:
             peak_since_entry = max(peak_since_entry, row['BTC'])
             if row['BTC'] < peak_since_entry * (1 - trailing_stop):
                 tgt = 0.0
-        if equity < peak_eq * (1 - stop_loss):
+
+        # Portfolio stop-loss: fire once, then cooldown 60 days before re-entry
+        if stop_cooldown > 0:
+            stop_cooldown -= 1
+            tgt = 0.0  # no new positions during cooldown
+        elif equity < peak_eq * (1 - stop_loss):
             tgt = 0.0
+            stop_cooldown = 30  # reset: wait 30 days
+
         if in_position and hold_days < min_hold and abs(tgt - position) < 0.3:
             tgt = position
 
@@ -316,6 +326,17 @@ st.markdown(
 with st.spinner("Fetching data & running backtest…"):
     master = load_master()
     eq_df  = run_backtest(master)
+
+with st.expander("Debug", expanded=False):
+    st.write("Master tail:", master[["date","BTC","score","regime","MVRV_Z","NUPL"]].tail(10))
+    st.write("Equity tail:", eq_df[["date","equity","position","score","regime"]].tail(10))
+    yr_eq = eq_df.copy()
+    yr_eq["year"] = pd.to_datetime(yr_eq["date"]).dt.year
+    for yr in [2023,2024,2025,2026]:
+        g = yr_eq[yr_eq["year"]==yr]
+        if len(g)>1:
+            ret = g["equity"].iloc[-1]/g["equity"].iloc[0]-1
+            st.write(f"{yr}: start={g['equity'].iloc[0]:.4f} end={g['equity'].iloc[-1]:.4f} ret={ret:+.2%} n={len(g)}")
 
 latest  = master.iloc[-1].to_dict()
 eq_now  = eq_df.iloc[-1]
