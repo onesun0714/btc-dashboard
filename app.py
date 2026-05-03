@@ -240,8 +240,6 @@ def run_backtest(_master):
     hold_days = 0; in_position = False
     eq_series = []
 
-    stop_cooldown = 0  # days since stop_loss fired
-
     for i in range(1, len(bt)):
         row  = bt.iloc[i]
         prev = bt.iloc[i - 1]
@@ -265,13 +263,9 @@ def run_backtest(_master):
             if row['BTC'] < peak_since_entry * (1 - trailing_stop):
                 tgt = 0.0
 
-        # Portfolio stop-loss: fire once, then cooldown 60 days before re-entry
-        if stop_cooldown > 0:
-            stop_cooldown -= 1
-            tgt = 0.0  # no new positions during cooldown
-        elif equity < peak_eq * (1 - stop_loss):
+        # Portfolio stop-loss: nb3 original — just zero today, re-entry allowed next day via score
+        if equity < peak_eq * (1 - stop_loss):
             tgt = 0.0
-            stop_cooldown = 30  # reset: wait 30 days
 
         if in_position and hold_days < min_hold and abs(tgt - position) < 0.3:
             tgt = position
